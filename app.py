@@ -27,6 +27,8 @@ if 'task_image_bytes' not in st.session_state:
     st.session_state.task_image_bytes = None
 if 'solution_image_bytes' not in st.session_state:
     st.session_state.solution_image_bytes = None
+if 'confirm_delete' not in st.session_state:
+    st.session_state.confirm_delete = False
 
 # ==========================================
 # ŠONINĖ JUOSTA: ISTORIJA (Iš duomenų bazės)
@@ -34,6 +36,7 @@ if 'solution_image_bytes' not in st.session_state:
 with st.sidebar:
     st.header("🕰️ Jūsų sesijos istorija")
     
+    # Pirmiausia užkrauname duomenis iš duomenų bazės
     try:
         db_response = supabase.table("History").select("*").order("created_at", desc=True).execute()
         history_data = db_response.data
@@ -41,15 +44,40 @@ with st.sidebar:
         history_data = []
         st.error(f"Nepavyko užkrauti istorijos: {e}")
 
-    if not history_data:
-        st.info("Čia atsiras jūsų nuskenuoti namų darbai.")
-    else:
+    # Jei duomenų yra, rodome trynimo mygtuką su apsauga
+    if history_data:
+        if not st.session_state.confirm_delete:
+            if st.button("🗑️ Ištrinti visą istoriją", use_container_width=True):
+                st.session_state.confirm_delete = True
+                st.rerun()
+        else:
+            st.warning("⚠️ Ar tikrai norite ištrinti visą istoriją? Šio veiksmo atšaukti negalima.")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("Taip, ištrinti", type="primary", use_container_width=True):
+                    with st.spinner("Istorija trinama..."):
+                        try:
+                            supabase.table("History").delete().gt("id", 0).execute()
+                            st.session_state.confirm_delete = False
+                            st.success("Istorija ištrinta!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Nepavyko ištrinti: {e}")
+            with col_no:
+                if st.button("Atšaukti", use_container_width=True):
+                    st.session_state.confirm_delete = False
+                    st.rerun()
+        
+        st.divider()
+        
         for i, item in enumerate(history_data):
             with st.expander(f"Užduotis #{len(history_data) - i}"):
                 st.markdown("**Nuskaitytas tekstas:**")
                 st.text(item['task_text'])
                 st.markdown("**Patarimas:**")
                 st.markdown(item['ai_advice'], unsafe_allow_html=True)
+    else:
+        st.info("Čia atsiras jūsų nuskenuoti namų darbai.")
 
 # ==========================================
 # PAGRINDINIS EKRANAS
@@ -135,13 +163,11 @@ elif st.session_state.step == 2:
     with col4:
         if st.button("🧠 Gauti pedagoginį patarimą", type="primary", use_container_width=True):
             
-            # NAUJA DALIS: Tikriname, ar toks tekstas jau buvo analizuotas duomenų bazėje
             is_duplicate = False
             with st.spinner("Tikrinama, ar ši užduotis jau buvo spręsta anksčiau..."):
                 try:
                     existing_task = supabase.table("History").select("ai_advice").eq("task_text", edited_text).execute()
                     if existing_task.data and len(existing_task.data) > 0:
-                        # Radome išsaugotą analizę!
                         st.session_state.current_advice = existing_task.data[0]['ai_advice']
                         is_duplicate = True
                 except Exception as db_err:
@@ -152,7 +178,6 @@ elif st.session_state.step == 2:
                 st.session_state.step = 3
                 st.rerun()
             else:
-                # Jei teksto neradome, kreipiamės į Claude Sonnet 5
                 with st.spinner("Claude Sonnet 5 vertina logiką ir ruošia patarimą... (Tai gali užtrukti kelias sekundes)"):
                     try:
                         client_anthropic = anthropic.Anthropic()

@@ -34,7 +34,6 @@ if 'solution_image_bytes' not in st.session_state:
 with st.sidebar:
     st.header("🕰️ Jūsų sesijos istorija")
     
-    # Traukiame duomenis iš Supabase "History" lentelės
     try:
         db_response = supabase.table("History").select("*").order("created_at", desc=True).execute()
         history_data = db_response.data
@@ -135,11 +134,30 @@ elif st.session_state.step == 2:
             
     with col4:
         if st.button("🧠 Gauti pedagoginį patarimą", type="primary", use_container_width=True):
-            with st.spinner("Claude Sonnet 5 vertina logiką ir ruošia patarimą... (Tai gali užtrukti kelias sekundes)"):
+            
+            # NAUJA DALIS: Tikriname, ar toks tekstas jau buvo analizuotas duomenų bazėje
+            is_duplicate = False
+            with st.spinner("Tikrinama, ar ši užduotis jau buvo spręsta anksčiau..."):
                 try:
-                    client_anthropic = anthropic.Anthropic()
-                    
-                    system_prompt = """Tu esi pedagoginis asistentas tėvams.
+                    existing_task = supabase.table("History").select("ai_advice").eq("task_text", edited_text).execute()
+                    if existing_task.data and len(existing_task.data) > 0:
+                        # Radome išsaugotą analizę!
+                        st.session_state.current_advice = existing_task.data[0]['ai_advice']
+                        is_duplicate = True
+                except Exception as db_err:
+                    st.warning("Nepavyko susisiekti su duomenų baze patikrinimui, tęsiame analizę...")
+            
+            if is_duplicate:
+                st.toast("Naudojamas ankstesnis išsaugotas sprendimas (sutaupyta AI užklausa!)", icon="✅")
+                st.session_state.step = 3
+                st.rerun()
+            else:
+                # Jei teksto neradome, kreipiamės į Claude Sonnet 5
+                with st.spinner("Claude Sonnet 5 vertina logiką ir ruošia patarimą... (Tai gali užtrukti kelias sekundes)"):
+                    try:
+                        client_anthropic = anthropic.Anthropic()
+                        
+                        system_prompt = """Tu esi pedagoginis asistentas tėvams.
 SVARBI TAISYKLĖ FORMATAVIMUI: Nenaudok jokių LaTeX formatų. Daugybai naudok ·, padalinimui :, lygybei =. Rodykles rašyk paprastai: ->.
 SVARBI TAISYKLĖ ANALIZEI: 
 1. Prieš vertindamas, visada pats žingsnis po žingsnio išspręsk uždavinį.
@@ -163,34 +181,33 @@ GRIEŽTAI naudok <br> žymą po KIEKVIENO matematinio žingsnio, kad jie garantu
 **2. KĄ SAKYTI VAIKUI:** 
 (1-2 trumpi patarimai tėvams)"""
 
-                    response = client_anthropic.messages.create(
-                        model="claude-sonnet-5",
-                        max_tokens=4000,
-                        system=system_prompt,
-                        messages=[
-                            {"role": "user", "content": f"TEKSTAS ANALIZEI:\n{edited_text}"}
-                        ]
-                    )
-                    
-                    ai_response = ""
-                    for block in response.content:
-                        if hasattr(block, 'text') and block.text:
-                            ai_response += block.text
-                            
-                    ai_response = ai_response.replace(r"\cdot", "·").replace("$", "").replace(r"\times", "x").replace(r"\[", "").replace(r"\]", "").replace(r"\Rightarrow", "->").replace(r"\(", "").replace(r"\)", "")
-                    
-                    # IŠSAUGOME DUOMENIS Į SUPABASE
-                    try:
-                        supabase.table("History").insert({"task_text": edited_text, "ai_advice": ai_response}).execute()
-                    except Exception as db_e:
-                        st.error(f"Nepavyko išsaugoti į duomenų bazę: {db_e}")
+                        response = client_anthropic.messages.create(
+                            model="claude-sonnet-5",
+                            max_tokens=4000,
+                            system=system_prompt,
+                            messages=[
+                                {"role": "user", "content": f"TEKSTAS ANALIZEI:\n{edited_text}"}
+                            ]
+                        )
+                        
+                        ai_response = ""
+                        for block in response.content:
+                            if hasattr(block, 'text') and block.text:
+                                ai_response += block.text
+                                
+                        ai_response = ai_response.replace(r"\cdot", "·").replace("$", "").replace(r"\times", "x").replace(r"\[", "").replace(r"\]", "").replace(r"\Rightarrow", "->").replace(r"\(", "").replace(r"\)", "")
+                        
+                        try:
+                            supabase.table("History").insert({"task_text": edited_text, "ai_advice": ai_response}).execute()
+                        except Exception as db_e:
+                            st.error(f"Nepavyko išsaugoti į duomenų bazę: {db_e}")
 
-                    st.session_state.current_advice = ai_response
-                    st.session_state.step = 3
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"Įvyko API klaida: {e}")
+                        st.session_state.current_advice = ai_response
+                        st.session_state.step = 3
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"Įvyko API klaida: {e}")
 
 elif st.session_state.step == 3:
     st.success("Analizė baigta! Rezultatas sėkmingai išsaugotas istorijoje kairėje.")

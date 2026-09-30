@@ -3,42 +3,54 @@ import base64
 import os
 from openai import OpenAI
 import anthropic
+from supabase import create_client, Client
 
-# Saugus API raktų užkrovimas iš Streamlit Secrets
+# Saugus API raktų užkrovimas
 os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 os.environ["ANTHROPIC_API_KEY"] = st.secrets["ANTHROPIC_API_KEY"]
 
-# Programėlės dizainas
+# Prisijungimas prie Supabase duomenų bazės
+supabase_url: str = st.secrets["SUPABASE_URL"]
+supabase_key: str = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(supabase_url, supabase_key)
+
 st.set_page_config(page_title="ParentAI", layout="wide")
 
-# Inicijuojame kintamuosius būsenos valdymui (Atmintis)
+# Inicijuojame kintamuosius būsenos valdymui
 if 'step' not in st.session_state:
     st.session_state.step = 1
 if 'transcription' not in st.session_state:
     st.session_state.transcription = ""
 if 'current_advice' not in st.session_state:
     st.session_state.current_advice = ""
-if 'history' not in st.session_state:
-    st.session_state.history = []
 if 'task_image_bytes' not in st.session_state:
     st.session_state.task_image_bytes = None
 if 'solution_image_bytes' not in st.session_state:
     st.session_state.solution_image_bytes = None
 
 # ==========================================
-# ŠONINĖ JUOSTA: ISTORIJA
+# ŠONINĖ JUOSTA: ISTORIJA (Iš duomenų bazės)
 # ==========================================
 with st.sidebar:
     st.header("🕰️ Jūsų sesijos istorija")
-    if len(st.session_state.history) == 0:
+    
+    # Traukiame duomenis iš Supabase "History" lentelės
+    try:
+        db_response = supabase.table("History").select("*").order("created_at", desc=True).execute()
+        history_data = db_response.data
+    except Exception as e:
+        history_data = []
+        st.error(f"Nepavyko užkrauti istorijos: {e}")
+
+    if not history_data:
         st.info("Čia atsiras jūsų nuskenuoti namų darbai.")
     else:
-        for i, item in enumerate(reversed(st.session_state.history)):
-            with st.expander(f"Užduotis #{len(st.session_state.history) - i}"):
+        for i, item in enumerate(history_data):
+            with st.expander(f"Užduotis #{len(history_data) - i}"):
                 st.markdown("**Nuskaitytas tekstas:**")
-                st.text(item['text'])
+                st.text(item['task_text'])
                 st.markdown("**Patarimas:**")
-                st.markdown(item['advice'], unsafe_allow_html=True)
+                st.markdown(item['ai_advice'], unsafe_allow_html=True)
 
 # ==========================================
 # PAGRINDINIS EKRANAS
@@ -50,7 +62,6 @@ st.divider()
 def encode_image_from_bytes(image_bytes):
     return base64.b64encode(image_bytes).decode('utf-8')
 
-# 1 ŽINGSNIS: NUOTRAUKŲ ĮKĖLIMAS IR SKAITYMAS (Naudoja OpenAI)
 if st.session_state.step == 1:
     col1, col2 = st.columns(2)
     with col1:
@@ -102,7 +113,6 @@ SVARBI TAISYKLĖ 2: Griežtai draudžiama naudoti LaTeX formatavimą (jokių \cd
                 except Exception as e:
                     st.error(f"Įvyko klaida skaitant nuotraukas: {e}")
 
-# 2 ŽINGSNIS: TEKSTO REDAGAVIMAS IR ANALIZĖS IŠKVIETIMAS (Naudoja Claude)
 elif st.session_state.step == 2:
     st.info("✏️ Patikrinkite, ar AI teisingai perskaitė vaiko raštą. Palyginkite su nuotraukomis ir ištaisykite klaidas šiame laukelyje.")
     
@@ -169,20 +179,21 @@ GRIEŽTAI naudok <br> žymą po KIEKVIENO matematinio žingsnio, kad jie garantu
                             
                     ai_response = ai_response.replace(r"\cdot", "·").replace("$", "").replace(r"\times", "x").replace(r"\[", "").replace(r"\]", "").replace(r"\Rightarrow", "->").replace(r"\(", "").replace(r"\)", "")
                     
+                    # IŠSAUGOME DUOMENIS Į SUPABASE
+                    try:
+                        supabase.table("History").insert({"task_text": edited_text, "ai_advice": ai_response}).execute()
+                    except Exception as db_e:
+                        st.error(f"Nepavyko išsaugoti į duomenų bazę: {db_e}")
+
                     st.session_state.current_advice = ai_response
-                    st.session_state.history.append({
-                        "text": edited_text,
-                        "advice": ai_response
-                    })
                     st.session_state.step = 3
                     st.rerun()
                     
                 except Exception as e:
                     st.error(f"Įvyko API klaida: {e}")
 
-# 3 ŽINGSNIS: REZULTATO ATVEIZDAVIMAS
 elif st.session_state.step == 3:
-    st.success("Analizė baigta! Rezultatas taip pat išsaugotas istorijoje kairėje.")
+    st.success("Analizė baigta! Rezultatas sėkmingai išsaugotas istorijoje kairėje.")
     
     with st.expander("📷 Paspauskite, kad peržiūrėtumėte įkeltas nuotraukas"):
         img_col1, img_col2 = st.columns(2)
@@ -194,9 +205,6 @@ elif st.session_state.step == 3:
                 st.image(st.session_state.solution_image_bytes, caption="Vaiko sprendimas", use_container_width=True)
                 
     st.divider()
-    
-    st.markdown("### 📝 Analizuotas tekstas:")
-    st.info(st.session_state.history[-1]['text'])
     
     st.markdown("### 🧠 AI Patarimas Tėvams:")
     st.markdown(f'<div style="background-color: #f0f2f6; padding: 20px; border-radius: 10px;">{st.session_state.current_advice}</div>', unsafe_allow_html=True)

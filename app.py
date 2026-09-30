@@ -36,7 +36,6 @@ if 'confirm_delete' not in st.session_state:
 with st.sidebar:
     st.header("🕰️ Jūsų sesijos istorija")
     
-    # Pirmiausia užkrauname duomenis iš duomenų bazės
     try:
         db_response = supabase.table("History").select("*").order("created_at", desc=True).execute()
         history_data = db_response.data
@@ -44,10 +43,9 @@ with st.sidebar:
         history_data = []
         st.error(f"Nepavyko užkrauti istorijos: {e}")
 
-    # Jei duomenų yra, rodome trynimo mygtuką su apsauga
     if history_data:
         if not st.session_state.confirm_delete:
-            if st.button("🗑️ Ištrinti visą istoriją", use_container_width=True):
+            if st.button("🗑️️ Ištrinti visą istoriją", use_container_width=True):
                 st.session_state.confirm_delete = True
                 st.rerun()
         else:
@@ -182,6 +180,7 @@ elif st.session_state.step == 2:
                     try:
                         client_anthropic = anthropic.Anthropic()
                         
+                        # ATNAUJINTAS PROMPTAS: Pridėta KLASĖS ir TEMOS identifikacija
                         system_prompt = """Tu esi pedagoginis asistentas tėvams.
 SVARBI TAISYKLĖ FORMATAVIMUI: Nenaudok jokių LaTeX formatų. Daugybai naudok ·, padalinimui :, lygybei =. Rodykles rašyk paprastai: ->.
 SVARBI TAISYKLĖ ANALIZEI: 
@@ -191,6 +190,9 @@ SVARBI TAISYKLĖ ANALIZEI:
 4. Prie kiekvieno uždavinio aiškiai parašyk vertinimą: "✅ GERAI" arba "❌ KLAIDA".
 
 Pateik atsakymą GRIEŽTAI šia struktūra:
+
+**🎓 KLASĖ IR TEMA:**
+(Pagal užduoties sudėtingumą įvertink ir parašyk, kuriai klasei tai skirta ir kokia tai matematinė tema. Pvz.: "6 klasė - Tiesinės lygtys su vienu nežinomuoju").
 
 **1. UŽDUOČIŲ ANALIZĖ IR TEISINGI SPRENDIMAI:**
 (Eik per kiekvieną uždavinį. Parašyk vertinimą ir paaiškink klaidas. Tada IŠKART po analizės parašyk teisingą sprendimą naudodamas šį tikslų HTML kodą):
